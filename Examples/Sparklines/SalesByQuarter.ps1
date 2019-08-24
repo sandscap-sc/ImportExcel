@@ -3,16 +3,7 @@ try { . $PSScriptRoot\..\..\LoadPSD1.ps1 } catch { }
 $xlfile = "$env:TEMP\SalesByQuarter.xlsx"
 Remove-Item $xlfile -ErrorAction SilentlyContinue
 
-class SalesData {
-    $Region
-    [Double]$Q1
-    [Double]$Q2
-    [Double]$Q3
-    [Double]$Q4
-    $YTDPerformance
-}
-
-[SalesData[]]$data = ConvertFrom-Csv @"
+$data = ConvertFrom-Csv @"
 Region,Q1,Q2,Q3,Q4,YTDPerformance
 Asia,1400,7200,5700,6900
 Europe,3400,2300,9400,7300
