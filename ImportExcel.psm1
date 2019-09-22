@@ -318,6 +318,10 @@ function Import-Excel {
         [String]$Password
     )
     begin {
+        if ($PSBoundParameters['Debug']) {
+            $DebugPreference = 'Continue'
+        }
+
         $sw = [System.Diagnostics.Stopwatch]::StartNew()
 
         Function Get-PropertyNames {
@@ -379,10 +383,12 @@ function Import-Excel {
                 throw "'$($Path)' file not found"
             }
 
+            Write-Debug "Loading '$Path': $($sw.Elapsed.TotalMilliseconds / 1000) seconds"
             $stream = New-Object -TypeName System.IO.FileStream -ArgumentList $Path, 'Open', 'Read', 'ReadWrite'
             $ExcelPackage = New-Object -TypeName OfficeOpenXml.ExcelPackage
             if   ($Password) { $ExcelPackage.Load($stream,$Password)}
             else             { $ExcelPackage.Load($stream) }
+            Write-Debug "Done loading '$Path': - $($sw.Elapsed.TotalMilliseconds / 1000) seconds"
         }
         try {
             #Select worksheet
@@ -391,7 +397,7 @@ function Import-Excel {
                 throw "Worksheet '$WorksheetName' not found, the workbook only contains the worksheets '$($ExcelPackage.Workbook.Worksheets)'. If you only wish to select the first worksheet, please remove the '-WorksheetName' parameter." ; return
             }
 
-            Write-Debug $sw.Elapsed.TotalMilliseconds
+            Write-Debug "Found Workbook: $($sw.Elapsed.TotalMilliseconds / 1000) seconds"
             #region Get rows and columns
             #If we are doing dataonly it is quicker to work out which rows to ignore before processing the cells.
             if (-not $EndRow   ) { $EndRow = $Worksheet.Dimension.End.Row }
@@ -427,12 +433,15 @@ function Import-Excel {
                 throw "Duplicate column headers found on row '$StartRow' in columns '$($Duplicates.Group.Column)'. Column headers must be unique, if this is not a requirement please use the '-NoHeader' or '-HeaderName' parameter."; return
             }
             #endregion
-            Write-Debug $sw.Elapsed.TotalMilliseconds
+            Write-Debug "Rows/Columns selected - Duration: $($sw.Elapsed.TotalMilliseconds / 1000) seconds"
             if (-not $Rows) {
                 Write-Warning "Worksheet '$WorksheetName' in workbook '$Path' contains no data in the rows after top row '$StartRow'"
             }
             else {
                 #region Create one object per row
+                $statusPoint = 1000
+                $rowsProcessed = 0
+                $scientificCells = 0
                 foreach ($R in $Rows) {
                     #Disabled write-verbose for speed
                     #  Write-Verbose "Import row '$R'"
@@ -441,19 +450,33 @@ function Import-Excel {
                     foreach ($P in $PropertyNames) {
                         # Handle Excel conversions from decimal to scientific notation.
                         # Identify rows where the value does not match the text and the value matches a regex pattern for scientific notation.
-                        if ( ($Worksheet.Cells[$R, $P.Column].Value -ne $Worksheet.Cells[$R, $P.Column].Text) -and ($Worksheet.Cells[$R, $P.Column].Value -match '([0-9]e)((\+|-)[0-9])') ) {
+                        ### Comparing .Value to .Text is not reliable. Sometimes they are both in scientific notation.
+                        #if ( ($Worksheet.Cells[$R, $P.Column].Value -ne $Worksheet.Cells[$R, $P.Column].Text) -and ($Worksheet.Cells[$R, $P.Column].Value -match '([0-9]e)((\+|-)[0-9])') ) {
+
+                        if ( ($Worksheet.Cells[$R, $P.Column].Value -match '([0-9]e)((\+|-)[0-9])') ) {
                             # Convert the value to a decimal
-                            $Worksheet.Cells[$R, $P.Column].Value = $Worksheet.Cells[$R, $P.Column].Value -as [decimal]
+                            #$decVal = $Worksheet.Cells[$R, $P.Column].Value -as [decimal]
+                            #Write-Verbose "Formatting scientific value: '$($Worksheet.Cells[$R, $P.Column].Value)' as '$decVal'"
+                            #$Worksheet.Cells[$R, $P.Column].Value = $Worksheet.Cells[$R, $P.Column].Value -as [decimal]
+                            $NewRow[$P.Value] = $Worksheet.Cells[$R, $P.Column].Value -as [decimal]
+                            $scientificCells++
+                        }else{
+                            $NewRow[$P.Value] = $Worksheet.Cells[$R, $P.Column].Value
                         }
-                        $NewRow[$P.Value] = $Worksheet.Cells[$R, $P.Column].Value
-                        #    Write-Verbose "Import cell '$($Worksheet.Cells[$R, $P.Column].Address)' with property name '$($p.Value)' and value '$($Worksheet.Cells[$R, $P.Column].Value)'."
+
+                        #Write-Verbose "Import cell '$($Worksheet.Cells[$R, $P.Column].Address)' with property name '$($p.Value)' and value '$($Worksheet.Cells[$R, $P.Column].Value)'."
                     }
 
+                    $rowsProcessed++
+                    if($rowsProcessed % $statusPoint -eq 0){
+                        $pct = ($rowsProcessed/$Rows.Count)
+                        Write-Progress -Activity 'Reading worksheet data...' -Status "In progress $rowsProcessed / $($Rows.Count) - $($pct.ToString('P')). Scientfic cells fixed: $scientificCells" -PercentComplete ($pct*100)
+                    }
                     [PSCustomObject]$NewRow
                 }
                 #endregion
             }
-            Write-Debug $sw.Elapsed.TotalMilliseconds
+            Write-Debug "Done - Duration: $($sw.Elapsed.TotalMilliseconds / 1000) seconds. Formatted scientificCells: $scientificCells"
         }
         catch { throw "Failed importing the Excel workbook '$Path' with worksheet '$Worksheetname': $_"; return }
         finally {
